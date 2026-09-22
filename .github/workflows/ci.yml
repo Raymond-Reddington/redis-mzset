@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        redis-version: ["6.2", "7.2"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Redis ${{ matrix.redis-version }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential wget
+          wget -q https://download.redis.io/releases/redis-${{ matrix.redis-version }}.6.tar.gz \
+            || wget -q https://download.redis.io/releases/redis-${{ matrix.redis-version }}.5.tar.gz \
+            || wget -q https://download.redis.io/releases/redis-${{ matrix.redis-version }}.4.tar.gz
+          tar xzf redis-*.tar.gz
+          cd redis-*/
+          make -j MALLOC=libc BUILD_TLS=no
+          sudo make install
+
+      - name: Build module
+        run: make
+
+      - name: Run standalone core tests
+        run: |
+          cc -O2 -Wall -Wextra -Wno-unused-parameter -std=gnu11 -I. \
+             tests/test_core.c encoding.c hashtable.c skiplist.c mzset.c \
+             -o tests/test_core
+          tests/test_core
+
+      - name: Run integration tests
+        run: bash tests/test.sh
+
+      - name: Run AOF persistence tests
+        run: bash tests/test_aof.sh
+
+  bench-smoke:
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Redis + Python
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential redis-server python3
+      - name: Build module
+        run: make
+      - name: Smoke bench (100k members)
+        run: bash bench/bench.sh 100000

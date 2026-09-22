@@ -1,0 +1,23 @@
+# build artifacts
+*.o
+*.so
+*.dylib
+mzset.so
+
+# test binaries
+tests/test_core
+
+# temp files
+/tmp/
+*.log
+*.pid
+*.aof
+*.rdb
+appendonly.aof
+dump.rdb
+
+# editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
