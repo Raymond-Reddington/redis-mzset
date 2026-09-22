@@ -147,6 +147,49 @@ Redis 6.0.16, WSL2 on Windows 11, 1M members, schema `(f64:desc, i64:asc)`:
 
 Reproduce with `bash bench/bench.sh 1000000`.
 
+### vs native `ZSET` (same host, 1M members, single sort field vs two-field mzset)
+
+| Operation | ZSET (1 f64) | MZSET (2 fields) | ZSET advantage |
+|---|---:|---:|:---:|
+| Bulk insert (`--pipe`) | 244K ops/s | 209K ops/s | 1.17x |
+| `RANK` (50 clients) | 51.6K ops/s | 51.2K ops/s | **1.01x** |
+| `SCORE` (50 clients) | 51.2K ops/s | 51.4K ops/s | **1.00x** |
+| `RANGE 0 99` | 39.5K ops/s | 31.8K ops/s | 1.24x |
+| `RANGE 0 99` + payload | 12.4K ops/s | 7.0K ops/s | 1.76x |
+| Memory / member | 96.4 B (1 field) | 127.3 B (2 fields) | MZSET 1.32x |
+
+Takeaway: on hot lookup paths (`RANK` / `SCORE`) `mzset` is indistinguishable
+from `ZSET`. Bulk insert and rank scans pay 17–24% for the extra bookkeeping.
+The reply-format cost of `WITHFIELDS` is the main gap for read-heavy multi-field
+workloads.
+
+Reproduce with `bash bench/bench_vs_zset.sh 1000000`.
+
+### Scaling with field count (500K members, all `f64:asc`)
+
+| Fields | insert/s | rank/s | range100/s | range+fields/s | mem MB | B/member |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1  | 190,651 | 47,710 | 30,675 | 8,460 | 53.0  | 111.2 |
+| 2  | 202,782 | 47,259 | 29,070 | 5,056 | 60.6  | 127.2 |
+| 4  | 162,943 | 49,850 | 33,113 | 2,789 | 75.9  | 159.2 |
+| 8  | 109,477 | 53,706 | 30,120 | 1,492 | 106.4 | 223.2 |
+| 16 |  62,402 | 49,310 | 26,455 |   742 | 167.4 | 351.2 |
+
+Key observations:
+
+- **Sort operations (`RANK` / `RANGE`) are essentially field-count invariant.**
+  Each traversal is `O(log N)` `memcmp`s; growing the ckey from 8 B to 128 B is
+  L1-cache noise.
+- **`INSERT` degrades sublinearly.** 1 → 16 fields drops throughput to ~1/3,
+  not 1/16, because per-field encoding is amortized against skiplist walk cost.
+- **`WITHFIELDS` degrades superlinearly (11× drop from 1 → 16 fields).** Each
+  result triggers N reply calls + nested array construction; when this path is
+  hot with many fields, consider a packed reply mode.
+- **Memory grows linearly at +16 B/member per added `f64` field** (raw blob 8 B
+  + composite-key 8 B), exactly matching the design estimate.
+
+Reproduce with `bash bench/bench_fields_sweep.sh 500000`.
+
 ## Development
 
 ```bash
